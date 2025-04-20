@@ -128,26 +128,87 @@ export const useAuthStore = create((set, get) => ({
     connectSocket: () => {
         const { authUser } = get()
 
-        if (!authUser || get().socket?.connected) return
+        if (!authUser) return;
+
+        if (get().socket) {
+            get().socket.disconnect();
+        }
 
         const socket = io(BASE_URL, {
             query: {
                 userId: authUser._id,
             },
-        })
+            reconnection: true,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000,
+            autoConnect: false,
+        });
 
-        socket.connect()
+        set({ socket: socket });
 
-        set({ socket: socket })
+        socket.on("connect", () => {
+            socket.emit("requestOnlineUsers");
+        });
+
+        socket.on("connect_error", (err) => {
+            console.error("Socket connection error:", err);
+
+            setTimeout(() => {
+                if (socket && !socket.connected) {
+                    console.log("Attempting to reconnect socket...");
+                    socket.connect();
+                }
+            }, 2000);
+        });
 
         socket.on("getOnlineUsers", (userIds) => {
-            set({ onlineUsers: userIds })
-        })
+            if (Array.isArray(userIds)) {
+                set({ onlineUsers: userIds });
+            } else {
+                console.error("Received invalid online users data:", userIds);
+            }
+        });
+
+        socket.connect();
+
+        const intervalId = setInterval(() => {
+            const currentSocket = get().socket;
+            if (currentSocket && !currentSocket.connected) {
+                console.log("Socket detected as disconnected, attempting to reconnect...");
+                try {
+                    currentSocket.connect();
+                }
+
+                catch (err) {
+                    console.error("Error reconnecting socket:", err);
+                }
+            }
+        }, 10000); // Check every 10 seconds
+
+        socket._reconnectInterval = intervalId;
     },
 
 
     disconnectSocket: () => {
-        if (get().socket?.connected) get().socket.disconnect()
+        const socket = get().socket;
+        if (!socket) return;
+
+        if (socket._reconnectInterval) {
+            clearInterval(socket._reconnectInterval);
+        }
+
+        socket.off("connect");
+        socket.off("connect_error");
+        socket.off("getOnlineUsers");
+
+        if (socket.connected) {
+            socket.disconnect();
+        }
+
+        set({
+            socket: null,
+            onlineUsers: []
+        });
     },
 
 }))

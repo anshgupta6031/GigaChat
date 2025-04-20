@@ -17,12 +17,23 @@ const io = new Server(server, {
 })
 
 
+const userSocketMap = {}
+const socketUserMap = {}
+
+
 export function getRecieverSocketId(userId) {
-    return userSocketMap[userId]
+    if (userSocketMap[userId]) {
+        const socketIds = Array.from(userSocketMap[userId]);
+        return socketIds.length > 0 ? socketIds[0] : null;
+    }
+    return null;
 }
 
 
-const userSocketMap = {}        //  {userId: socketId}
+const broadcastOnlineUsers = () => {
+    const onlineUsers = Object.keys(userSocketMap);
+    io.emit("getOnlineUsers", onlineUsers);
+};
 
 
 io.on("connection", (socket) => {
@@ -30,20 +41,49 @@ io.on("connection", (socket) => {
 
     const userId = socket.handshake.query.userId
 
-    if (userId) userSocketMap[userId] = socket.id
+    if (userId) {
+        socketUserMap[socket.id] = userId;
 
-    //  io.emit() is used to send events to all the connected clients.....
-    io.emit("getOnlineUsers", Object.keys(userSocketMap))
+        if (!userSocketMap[userId]) {
+            userSocketMap[userId] = new Set();
+        }
+
+        userSocketMap[userId].add(socket.id);
+
+        broadcastOnlineUsers();
+    }
+
+    socket.on("newMessage", (message) => {
+        const receiverSocketId = getRecieverSocketId(message.recieverId);
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit("newMessage", message);
+        }
+    });
+
+    socket.on("requestOnlineUsers", () => {
+        broadcastOnlineUsers();
+    });
 
     socket.on("disconnect", () => {
         console.log("A user disconnected.....", socket.id)
 
-        delete userSocketMap[userId]
-        io.emit("getOnlineUsers", Object.keys(userSocketMap))
+        const userId = socketUserMap[socket.id];
+
+        if (userId) {
+            if (userSocketMap[userId]) {
+                userSocketMap[userId].delete(socket.id);
+
+                if (userSocketMap[userId].size === 0) {
+                    delete userSocketMap[userId];
+                }
+            }
+
+            delete socketUserMap[socket.id];
+
+            broadcastOnlineUsers();
+        }
     })
 })
-
-
 
 
 export { io, app, server }

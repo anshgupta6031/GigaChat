@@ -16,7 +16,6 @@ export const useChatStore = create((set, get) => ({
     isMessagesLoading: false,
 
 
-
     getUsers: async () => {
         set({ isUserLoading: true })
 
@@ -55,10 +54,30 @@ export const useChatStore = create((set, get) => ({
 
     sendMessage: async (MessageData) => {
         const { selectedUser, messages } = get()
+        const socket = useAuthStore.getState().socket;
+        const { authUser } = useAuthStore.getState();
 
         try {
             const res = await axiosInstance.post(`/message/send/${selectedUser._id}`, MessageData)
+
             set({ messages: [...messages, res.data] })
+
+            if (socket && socket.connected) {
+                const socketMessage = {
+                    _id: res.data._id,
+                    senderId: authUser._id,
+                    recieverId: selectedUser._id,
+                    text: MessageData.text,
+                    image: res.data.image || null,
+                    createdAt: new Date().toISOString()
+                };
+
+                socket.emit("newMessage", socketMessage);
+            }
+
+            else {
+                console.warn("Socket not connected, real-time delivery might not work");
+            }
         }
 
         catch (error) {
@@ -69,24 +88,38 @@ export const useChatStore = create((set, get) => ({
 
     subscribeToMessages: () => {
         const { selectedUser } = get()
+        const { authUser } = useAuthStore.getState();
 
         if (!selectedUser) return
 
         const socket = useAuthStore.getState().socket;
+        if (!socket) return;
 
-        socket.on("newMessage", (newMessage)=>{
-            if(newMessage.senderId !== selectedUser._id) return
+        socket.off("newMessage");
+        socket.off("broadcastMessage");
 
-            set({
-                messages: [...get().messages, newMessage],
-            })
-        })
+        const handleNewMessage = (newMessage) => {
+            console.log("Received new message:", newMessage);
+            const currentMessages = get().messages;
+
+            if ((newMessage.senderId === selectedUser._id && newMessage.recieverId === authUser._id) ||
+                (newMessage.recieverId === selectedUser._id && newMessage.senderId === authUser._id)) {
+
+                if (!currentMessages.some(msg => msg._id === newMessage._id)) {
+                    set({
+                        messages: [...currentMessages, newMessage],
+                    });
+                }
+            }
+        };
+
+        socket.on("newMessage", handleNewMessage);
+        socket.on("broadcastMessage", handleNewMessage);
     },
 
 
     unsubscribeFromMessages: () => {
         const socket = useAuthStore.getState().socket
-
         socket.off("newMessage")
     },
 
